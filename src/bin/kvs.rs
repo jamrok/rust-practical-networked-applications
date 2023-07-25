@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use kvs::{
-    KvStore,
+    KvStore, KvsEngine,
     KvsErrors::{EmptyResponse, KeyNotFound},
 };
 use std::env::current_dir;
