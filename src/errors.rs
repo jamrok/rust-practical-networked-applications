@@ -1,4 +1,5 @@
 use thiserror::Error;
+pub type Result<T> = anyhow::Result<T, KvsErrors>;
 
 #[derive(Debug, Error)]
 pub enum KvsErrors {
