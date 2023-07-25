@@ -1,7 +1,9 @@
 #![deny(clippy::all)]
 // #![deny(missing_docs)]
-
 mod engines;
 mod errors;
-pub use engines::{KvStore, KvsEngine};
-pub use errors::{KvsErrors, Result};
+pub mod serde;
+pub mod server;
+pub mod shared;
+pub use engines::{KvStore, KvsEngine, SledKvsEngine};
+pub use errors::{KvsError, Result};

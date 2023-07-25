@@ -1,22 +1,22 @@
 use crate::{
+    serde::BincodeSerde,
+    shared::{
+        initialize_log_directory, new_reader, new_writer, Command, Remove, Set,
+        LOG_COMPACTION_MAX_KEY_DENSITY_PERCENT, LOG_ROTATION_MIN_SIZE_BYTES,
+    },
     KvsEngine,
-    KvsErrors::{BufReaderError, KeyNotFound, LogIndexIDError},
+    KvsError::{KeyNotFound, LogIndexIDError},
     Result,
 };
 use derive_more::{Constructor, From};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap},
-    fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, BufWriter, Seek, SeekFrom, Write},
+    collections::HashMap,
+    fs::{self, File},
+    io::{BufReader, BufWriter, Seek, SeekFrom},
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
-
-// TODO: move to config files
-pub const LOG_DIRECTORY_PREFIX: &str = "log_index";
-pub const LOG_ROTATION_MIN_SIZE_BYTES: u64 = 256 * 1024;
-pub const LOG_COMPACTION_MAX_KEY_DENSITY_PERCENT: u64 = 30;
 
 #[derive(Constructor, Clone, Debug, Default, From, Deserialize, Serialize)]
 pub struct CompactionList {
@@ -36,8 +36,6 @@ pub struct LogPointer {
     offset: LogOffset,
 }
 
-type Key = String;
-type Value = String;
 type LogPointerIndex = HashMap<String, LogPointer>;
 type LogId = u64;
 type LogOffset = u64;
@@ -61,24 +59,24 @@ pub struct LogMetadata {
 
 pub struct LogIndex {
     database: LogPointerIndex,
-    reader: BTreeMap<LogId, BufReader<File>>,
+    reader: HashMap<LogId, BufReader<File>>,
     writer: BufWriter<File>,
     metadata: LogMetadata,
 }
 
 impl LogIndex {
     fn new(path: PathBuf) -> Result<LogIndex> {
-        let path = Self::initialize_log_directory(path)?;
+        let path = initialize_log_directory(path)?;
         let ids = Self::get_file_log_ids(&path)?;
         let mut id = 0;
-        let mut reader = BTreeMap::new();
+        let mut reader = HashMap::new();
         for log_id in &ids {
-            let buf_reader = Self::reader(&path, log_id)?;
+            let buf_reader = Self::log_reader(&path, log_id)?;
             reader.insert(*log_id, buf_reader);
             id = *log_id;
         }
         let compaction_list = CompactionList::default();
-        let writer = Self::writer(&path, &id)?;
+        let writer = Self::log_writer(&path, &id)?;
         let size = 0;
 
         // dbg!(&path, &reader, &writer);
@@ -97,32 +95,17 @@ impl LogIndex {
         })
     }
 
-    fn initialize_log_directory(path: PathBuf) -> Result<PathBuf> {
-        let path = path.join(LOG_DIRECTORY_PREFIX);
-        fs::create_dir_all(&path)?;
-        Ok(path)
-    }
-
-    fn reader(path: &Path, id: &LogId) -> Result<BufReader<File>> {
+    fn log_reader(path: &Path, id: &LogId) -> Result<BufReader<File>> {
         let file = Self::get_log_file(path, id)?;
         if !file.exists() {
             File::create(&file)?;
         }
-        Ok(BufReader::new(
-            OpenOptions::new().read(true).open(&file).map_err(|e| {
-                BufReaderError(
-                    format!("Error opening file {}", file.display().to_string()),
-                    e,
-                )
-            })?,
-        ))
+        new_reader(&file)
     }
 
-    fn writer(path: &Path, id: &LogId) -> Result<BufWriter<File>> {
+    fn log_writer(path: &Path, id: &LogId) -> Result<BufWriter<File>> {
         let file = Self::get_log_file(path, id)?;
-        Ok(BufWriter::new(
-            OpenOptions::new().create(true).append(true).open(file)?,
-        ))
+        new_writer(file)
     }
 
     fn get_log_file(path: &Path, log_id: &LogId) -> Result<PathBuf> {
@@ -132,12 +115,19 @@ impl LogIndex {
     fn replay_log(mut self) -> Result<Self> {
         let mut id = 0;
         let mut size = 0;
-        for (log_id, mut reader) in self.reader.iter_mut() {
+        let mut sorted_log_ids = self.reader.keys().copied().collect::<Vec<_>>();
+        sorted_log_ids.sort_unstable();
+        for log_id in sorted_log_ids {
+            let record = self
+                .reader
+                .get_mut(&log_id)
+                .expect("Unable to fetch reader by Id");
+            let mut reader = &mut *record;
             let mut offset = 0;
-            id = *log_id;
+            id = log_id;
             let file_info = reader.get_ref().metadata()?;
             while offset < file_info.size() {
-                let command = Command::deserialize_from(&mut reader)?;
+                let command = Command::deserialize_from_reader(&mut reader)?;
                 let log_pointer = LogPointer::new(id, offset);
                 size = log_pointer.offset;
                 // eprintln!(
@@ -163,16 +153,17 @@ impl LogIndex {
             Command::Set(cmd) => {
                 index.insert(cmd.key, log_pointer);
             }
-            Command::Remove(cmd) => {
+            Command::Rm(cmd) => {
                 index.remove(&cmd.key);
             }
+            Command::Get(_) => {}
         };
         Ok(())
     }
 
     fn log_command(&mut self, command: Command) -> Result<()> {
         self.try_log_rotate()?;
-        let log_offset = &command.serialize_into(&mut self.writer)?;
+        let log_offset = &command.serialize_into_writer(&mut self.writer)?;
         let log_pointer = LogPointer::new(self.metadata.active_log_id, *log_offset);
         self.metadata.size = self.writer.stream_position()?;
         // dbg!(&self.size);
@@ -192,6 +183,7 @@ impl LogIndex {
             return Ok(false);
         }
         let mut rotated = false;
+        // TODO: Remove all the dbg statements
         // dbg!(
         //     "log_rotate",
         //     self.metadata.size,
@@ -202,10 +194,10 @@ impl LogIndex {
             self.metadata.size = 0;
             self.metadata.active_log_id += 1;
             self.metadata.ids.push(self.metadata.active_log_id);
-            self.writer = Self::writer(&self.metadata.path, &self.metadata.active_log_id)?;
+            self.writer = Self::log_writer(&self.metadata.path, &self.metadata.active_log_id)?;
             self.reader.insert(
                 self.metadata.active_log_id,
-                Self::reader(&self.metadata.path, &self.metadata.active_log_id)?,
+                Self::log_reader(&self.metadata.path, &self.metadata.active_log_id)?,
             );
             self.try_compacting_logs()?;
             rotated = true;
@@ -230,7 +222,7 @@ impl LogIndex {
             // dbg!(&reader.stream_position());
             reader.seek(SeekFrom::Start(pointer.offset))?;
             // dbg!(&reader.stream_position());
-            Ok(Some(Command::deserialize_from(reader)?))
+            Ok(Some(Command::deserialize_from_reader(reader)?))
         } else {
             Ok(None)
         }
@@ -372,25 +364,6 @@ pub struct KvStore {
     index: LogIndex,
 }
 
-#[derive(Clone, Debug, From, Deserialize, Serialize)]
-enum Command {
-    /// Save the given string value to the given string key
-    Set(Set),
-    /// Remove the given string key
-    Remove(Remove),
-}
-
-#[derive(Constructor, Clone, Debug, Default, From, Deserialize, Serialize)]
-struct Set {
-    key: Key,
-    value: Value,
-}
-
-#[derive(Constructor, Clone, Debug, Default, From, Deserialize, Serialize)]
-struct Remove {
-    key: Key,
-}
-
 impl KvsEngine for KvStore {
     fn get(&mut self, key: String) -> Result<Option<String>> {
         self.index.get_value(key)
@@ -421,25 +394,5 @@ impl KvStore {
         let path = path.into();
         let index = LogIndex::new(path)?.replay_log()?;
         Ok(KvStore::new(index))
-    }
-}
-
-impl Command {
-    fn value(&self) -> Option<&Value> {
-        match self {
-            Command::Set(cmd) => Some(&cmd.value),
-            Command::Remove(_) => None,
-        }
-    }
-
-    fn serialize_into<T: Write + Seek>(&self, mut writer: T) -> Result<u64> {
-        let log_position = writer.stream_position()?;
-        bincode::serialize_into(&mut writer, self)?;
-        writer.flush()?;
-        Ok(log_position)
-    }
-
-    fn deserialize_from<T: BufRead>(reader: T) -> Result<Self> {
-        Ok(bincode::deserialize_from::<_, Self>(reader)?)
     }
 }

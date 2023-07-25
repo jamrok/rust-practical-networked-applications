@@ -1,4 +1,7 @@
 pub mod kvs;
+pub mod sled;
+
+pub use self::{kvs::KvStore, sled::SledKvsEngine};
 use crate::Result;
 
 pub trait KvsEngine {
@@ -37,4 +40,3 @@ pub trait KvsEngine {
     /// If the value is not written successfully.
     fn set(&mut self, key: String, value: String) -> Result<()>;
 }
-pub use kvs::KvStore;
