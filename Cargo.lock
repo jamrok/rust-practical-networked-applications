@@ -500,16 +500,18 @@ dependencies = [
 
 [[package]]
 name = "kvs"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
  "bincode",
  "clap",
  "criterion",
+ "crossbeam-utils",
  "derive_more",
  "fake",
  "glob",
+ "panic-control",
  "predicates",
  "rand",
  "serde",
@@ -623,6 +625,12 @@ name = "overload"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39"
+
+[[package]]
+name = "panic-control"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "159973aebc43b4640619042b3bf160e3b6348000a949e37c0806ae6acc79d6c7"
 
 [[package]]
 name = "parking_lot"
