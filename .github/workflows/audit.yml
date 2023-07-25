@@ -1,0 +1,43 @@
+name: Audit
+
+on:
+  pull_request:
+    paths:
+      - "**/Cargo.lock"
+      - ".github/workflows/audit.yml"
+  push:
+    branches: main
+    paths:
+      - "**/Cargo.lock"
+      - ".github/workflows/audit.yml"
+  schedule:
+    - cron: '30 0 * * *'
+
+# Cancel in-progress jobs or runs for the current workflow (or the fallback run ID)
+# https://docs.github.com/en/actions/using-jobs/using-concurrency#example-using-a-fallback-value
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  Security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Use cache to help run audit only if needed
+        uses: actions/cache@v3
+        id: audit-cache
+        with:
+          key: ${{ runner.os }}-audit-${{ hashFiles('**/Cargo.lock') }}
+          lookup-only: true
+          path: Cargo.lock
+
+      - name: Audit
+        run: |
+          if [[ "${{ steps.audit-cache.outputs.cache-hit }}" == "true" ]]; then
+            echo "Skipping audit due to a previous run for the same files being successful"
+          else
+            cargo-audit --version
+            cargo audit -D warnings
+          fi

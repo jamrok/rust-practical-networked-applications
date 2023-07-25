@@ -1,2 +1,4 @@
-/target
+*.sw*
 .idea
+/target
+log_index*
