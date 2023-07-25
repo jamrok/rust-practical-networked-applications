@@ -1,15 +1,15 @@
 use thiserror::Error;
-pub type Result<T> = anyhow::Result<T, KvsErrors>;
+pub type Result<T> = anyhow::Result<T, KvsError>;
 
 #[derive(Debug, Error)]
-pub enum KvsErrors {
+pub enum KvsError {
     #[error("")]
     EmptyResponse,
 
-    #[error(transparent)]
+    #[error("IO Error: {0}")]
     IoError(#[from] std::io::Error),
 
-    #[error("BufReader Error")]
+    #[error("BufReader Error: {0}")]
     BufReaderError(String, std::io::Error),
 
     #[error("Can't glob given pattern")]
@@ -26,4 +26,16 @@ pub enum KvsErrors {
 
     #[error("Can't serialize data")]
     SerializationError(#[from] bincode::Error),
+
+    #[error("Server Not Initialized")]
+    ServerNotInitialized,
+
+    #[error("Sled DB Error")]
+    SledDB(#[from] sled::Error),
+
+    #[error("UTF8 Error")]
+    Utf8Error(#[from] std::string::FromUtf8Error),
+
+    #[error("Wrong engine selected")]
+    WrongEngine,
 }

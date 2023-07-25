@@ -1,7 +1,8 @@
-# 🦀 Practical Networked Applications (PNA) in Rust
+### 🦀 Practical Networked Applications (PNA) in Rust
 
 [![Code Checks][badge_gha_checks]][gha_checks]
 [![Security Audit][badge_gha_audit]][gha_audit]
+[![codecov][badge_codecov]][codecov]
 
 A training course about practical systems software construction in Rust.
 
@@ -16,6 +17,9 @@ A training course about practical systems software construction in Rust.
 - [Project 3: Synchronous client-server networking][project_3]
 - [Project 4: Concurrency and Parallelism][project_4]
 
+### 🔋 Code Coverage
+[<img src="https://codecov.io/gh/jamrok/rust-practical-networked-applications/branch/main/graphs/tree.svg?token=GACYI5PFJT" width=150>][codecov]
+
 ### 🪝 Git Hooks
 [Git Hooks][git_hooks] are in the [.hooks](.hooks) directory.
 
@@ -28,8 +32,27 @@ The main hook is [`.hooks/pre-commit`](.hooks/pre-commit):
   - ℹ️ Ensure everything you want to commit is staged as they will be committed if the checks pass.
 - To skip triggering this hook, append `-n` or `--no-verify` to the `git commit` command you ran.
 
+### 📊 [Benchmarks][criterion_report]
+
+#### 🖼️ Latest Benchmark Snapshots (click to see details)
+
+| [<img src="https://github.com/jamrok/pna-benches/blob/benchmarks/screenshots/criterion-bench-main.png" width=100%>][criterion_report] |
+|:-------------------------------------------------------------------------------------------------------------------------------------:|
+
+| [<img src="https://github.com/jamrok/pna-benches/blob/benchmarks/screenshots/read-criterion-bench-main.png" width=100%>][criterion_report_read] | [<img src="https://github.com/jamrok/pna-benches/blob/benchmarks/screenshots/write-criterion-bench-main.png" width=100%>][criterion_report_write] |
+|:-----------------------------------------------------------------------------------------------------------------------------------------------:|:-------------------------------------------------------------------------------------------------------------------------------------------------:|
+
+| [<img src="https://github.com/jamrok/pna-benches/blob/benchmarks/screenshots/benchmark-action-main.png" width=70% style="display:block; margin-left:auto; margin-right:auto" >][benchmark_report] |
+|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------:|
+
+[badge_codecov]: https://codecov.io/gh/jamrok/rust-practical-networked-applications/branch/main/graph/badge.svg?token=GACYI5PFJT
 [badge_gha_audit]: https://github.com/jamrok/rust-practical-networked-applications/actions/workflows/audit.yml/badge.svg
 [badge_gha_checks]: https://github.com/jamrok/rust-practical-networked-applications/actions/workflows/checks.yml/badge.svg
+[benchmark_report]: https://jamrok.github.io/pna-benches/benchmark-action/
+[codecov]: https://app.codecov.io/gh/jamrok/rust-practical-networked-applications
+[criterion_report]: https://jamrok.github.io/pna-benches/criterion/report/
+[criterion_report_read]: https://jamrok.github.io/pna-benches/criterion/engines_read/report/
+[criterion_report_write]: https://jamrok.github.io/pna-benches/criterion/engines_write/report/
 [gha_audit]: https://github.com/jamrok/rust-practical-networked-applications/actions/workflows/audit.yml
 [gha_checks]: https://github.com/jamrok/rust-practical-networked-applications/actions/workflows/checks.yml
 [git_hooks]: https://git-scm.com/docs/githooks

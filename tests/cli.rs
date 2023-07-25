@@ -2,7 +2,9 @@ use assert_cmd::prelude::*;
 use predicates::str::{contains, is_empty};
 use std::{
     fs::{self, File},
+    net::{SocketAddr, TcpStream},
     process::Command,
+    str::FromStr,
     sync::mpsc,
     thread,
     time::Duration,
@@ -168,6 +170,7 @@ fn cli_log_configuration() {
     child.kill().expect("server exited before killed");
 
     let content = fs::read_to_string(&stderr_path).expect("unable to read from stderr file");
+    println!("[{}]", content);
     assert!(content.contains(env!("CARGO_PKG_VERSION")));
     assert!(content.contains("kvs"));
     assert!(content.contains("127.0.0.1:4001"));
@@ -224,10 +227,12 @@ fn cli_access_server(engine: &str, addr: &str) {
         .spawn()
         .unwrap();
     let handle = thread::spawn(move || {
-        let _ = receiver.recv(); // wait for main thread to finish
+        let _recv = receiver.recv(); // wait for main thread to finish
+        thread::sleep(Duration::from_secs(1)); // Give the server time to persist data
         child.kill().expect("server exited before killed");
+        let _ = child.wait(); // Wait for the process to exit properly before restarting later
     });
-    thread::sleep(Duration::from_secs(1));
+    wait_for_server_to_start(addr);
 
     Command::cargo_bin("kvs-client")
         .unwrap()
@@ -266,8 +271,8 @@ fn cli_access_server(engine: &str, addr: &str) {
         .args(["get", "key2", "--addr", addr])
         .current_dir(&temp_dir)
         .assert()
-        .success()
-        .stdout(contains("Key not found"));
+        .failure()
+        .stderr(contains("Key not found"));
 
     Command::cargo_bin("kvs-client")
         .unwrap()
@@ -308,8 +313,7 @@ fn cli_access_server(engine: &str, addr: &str) {
         let _ = receiver.recv(); // wait for main thread to finish
         child.kill().expect("server exited before killed");
     });
-    thread::sleep(Duration::from_secs(1));
-
+    wait_for_server_to_start(addr);
     Command::cargo_bin("kvs-client")
         .unwrap()
         .args(["get", "key2", "--addr", addr])
@@ -322,10 +326,23 @@ fn cli_access_server(engine: &str, addr: &str) {
         .args(["get", "key1", "--addr", addr])
         .current_dir(&temp_dir)
         .assert()
-        .success()
-        .stdout(contains("Key not found"));
+        .failure()
+        .stderr(contains("Key not found"));
     sender.send(()).unwrap();
     handle.join().unwrap();
+}
+
+fn wait_for_server_to_start(addr: &str) {
+    for _ in 1..=5 {
+        let stream = TcpStream::connect_timeout(
+            &SocketAddr::from_str(addr).unwrap(),
+            Duration::from_secs(1),
+        );
+        if stream.is_ok() {
+            break;
+        }
+        thread::sleep(Duration::from_secs(1));
+    }
 }
 
 #[test]

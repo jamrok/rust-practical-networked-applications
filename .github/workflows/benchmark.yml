@@ -1,0 +1,367 @@
+name: Benchmark
+
+on:
+  push:
+    branches:
+      - "main"
+  pull_request:
+    paths:
+      - "**.rs"
+      - "**/Cargo*"
+      - ".github/workflows/benchmark.yml"
+
+# Cancel in-progress jobs or runs for the current workflow (or the fallback run ID)
+# https://docs.github.com/en/actions/using-jobs/using-concurrency#example-using-a-fallback-value
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+# https://docs.github.com/en/actions/using-jobs/assigning-permissions-to-jobs
+# https://docs.github.com/rest/overview/permissions-required-for-fine-grained-personal-access-tokens
+permissions:
+  # Permission to update cache, benchmark contents in gh-pages branch
+  contents: write
+
+env:
+  ALERT_THRESHOLD: "100%"
+  BENCHMARK_RESULT_FILE: "benchmark_results.txt"
+  # Branch to always compare the current benchmark against
+  BENCHMARK_TARGET_BRANCH: "main"
+  CARGO_TERM_COLOR: "always"
+  CRITERION_BENCH_DESTINATION_PATH: "criterion"
+  CRITERION_BENCH_NAME: "criterion-bench"
+  CRITERION_BENCH_SOURCE_PATH: "target/criterion"
+  FAIL_THRESHOLD: "200%"
+  GITHUB_BRANCH_NAME: "${{ github.head_ref || github.ref_name }}"
+  GITHUB_PAGES_BENCHMARK_DIR: "benchmark-action"
+  # Note: The repo and branch must be created in advance and the branch be configured for Github Pages in that repo.
+  GITHUB_PAGES_BRANCH: "benchmarks"
+  GITHUB_PAGES_REPO_NAME: "pna-benches"
+  GITHUB_PAGES_REPO_OWNER: "${{ github.repository_owner }}"
+  SCREENSHOT_DIR: "screenshots"
+  SCREENSHOT_FILE_EXTENSION: "png"
+  SCREENSHOT_FILE_PREFIX: "benchmark-action"
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    outputs:
+      SCREENSHOT_FILE: ${{ steps.custom-vars.outputs.SCREENSHOT_FILE }}
+      CRITERION_BENCH_SCREENSHOT: ${{ steps.custom-vars.outputs.CRITERION_BENCH_SCREENSHOT }}
+      GITHUB_PAGES_REPO_URL: ${{ steps.custom-vars.outputs.GITHUB_PAGES_REPO_URL }}
+    steps:
+      - uses: actions/checkout@v3
+
+      # https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#setting-an-environment-variable
+      # https://docs.github.com/en/actions/learn-github-actions/variables#default-environment-variables
+      - name: Add Custom ENV variables
+        id: custom-vars
+        run: |
+          # NOTE:
+          # add_env does a `tee` which shows the variables contents.
+          # Make another function called `add_secret_env` that doesn't reveal the contents if needed.
+          add_env() { VAR="$1=$2"; export $VAR; echo "$VAR" | tee -a "$GITHUB_ENV" | tee -a "$GITHUB_OUTPUT"; }
+          normalize_name() { echo "$@" | grep -oE "[^.]+" | sed -E -e "s/(\W|_)+/-/g" | paste -sd '.'; }
+
+          git fetch -q --unshallow || true
+          TARGET_COMMIT=$(git rev-parse --short=7 "origin/$BENCHMARK_TARGET_BRANCH")
+          add_env BENCHMARK_TARGET_BRANCH_COMMIT "$TARGET_COMMIT"
+          add_env CARGO_ID $(cargo -q --version 2>/dev/null | sed -E -e "s/(\W|[ ])+/-/g" -e "s/-$//")
+          add_env SCREENSHOT_FILE $(normalize_name "$SCREENSHOT_FILE_PREFIX-$GITHUB_BRANCH_NAME.$SCREENSHOT_FILE_EXTENSION")
+          add_env CRITERION_BENCH_SCREENSHOT $(normalize_name "$CRITERION_BENCH_NAME-$GITHUB_BRANCH_NAME.$SCREENSHOT_FILE_EXTENSION")
+          add_env GITHUB_PAGES_REPO_URL https://${{ env.GITHUB_PAGES_REPO_OWNER }}.github.io/${{ env.GITHUB_PAGES_REPO_NAME }}
+
+      # Download the previous benchmark and cargo cache (if they exist)
+      # Note: Benchmark cache is saved automatically in the 'Post' step when the workflow succeeds
+      - name: Restore benchmark cache (if any)
+        uses: actions/cache/restore@v3
+        id: benchmark-cache-restore
+        with:
+          path: |
+            cache
+          key: ${{ runner.os }}-benchmark-${{ env.BENCHMARK_TARGET_BRANCH }}-${{ env.BENCHMARK_TARGET_BRANCH_COMMIT }}
+
+      - name: Restore cargo cache (if any)
+        uses: actions/cache/restore@v3
+        id: cargo-cache-restore
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-benchmark-${{ hashFiles('**/Cargo.lock') }}-${{ env.CARGO_ID }}
+
+      - name: Run Benchmark
+        run: |
+          BENCHMARK_FILE="$PWD/${{ env.BENCHMARK_RESULT_FILE }}"
+          cargo --version
+          cargo bench --bench benches -- --output-format bencher | tee "$BENCHMARK_FILE"
+          echo "Benchmark saved to: $BENCHMARK_FILE"
+          ls -ld "$BENCHMARK_FILE"
+
+      - name: Upload Criterion Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ env.CRITERION_BENCH_NAME }}
+          path: ${{ env.CRITERION_BENCH_SOURCE_PATH }}
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Rust Benchmarks
+          tool: 'cargo'
+          # Where the output from the benchmark tool is stored
+          output-file-path: ${{ env.BENCHMARK_RESULT_FILE }}
+          # Where the previous data file is stored
+          # `auto-push` must be false when `external-data-json-path` is set since this action reads/writes the given JSON file and never pushes to remote
+          external-data-json-path: ./cache/benchmark-data.json
+
+          # Auto generated token per workflow
+          # https://docs.github.com/en/actions/security-guides/automatic-token-authentication
+          # Needed when deploying to Github Pages and/or making a comment on the PR
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Name of your GitHub pages branch.
+          # gh-pages-branch: "${{ env.GITHUB_PAGES_BRANCH }}"
+          # # Path to a directory that contains benchmark files on the GitHub pages branch
+          # benchmark-data-dir-path: "${{ env.GITHUB_PAGES_BENCHMARK_DIR }}"
+          # Push and deploy GitHub pages branch automatically
+          auto-push: false
+          # Enables Job Summary for PRs
+          # Don't set this to true if this github-action-benchmark GitHub Action was previously run in another step
+          # Otherwise, it will try to clone the repo twice to the same directory and fail when trying to do the summary (2nd clone)
+          summary-always: true
+          # Show an alert with commit comment after detecting the specified performance regression
+          alert-threshold: '${{ env.ALERT_THRESHOLD }}'
+          # The threshold value used to determine if the workflow should fail
+          fail-threshold: '${{ env.FAIL_THRESHOLD }}'
+          # Enable alert commit comment
+          comment-on-alert: true
+          # Fail the workflow when an alert happens
+          fail-on-alert: false
+          # Set the user to notify if needed
+          # alert-comment-cc-users: '@username'
+
+      # Save cargo cache for future runs
+      - name: Save cargo cache data
+        if: ${{ always() }}
+        uses: actions/cache/save@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ steps.cargo-cache-restore.outputs.cache-primary-key }}
+
+      # Only save benchmark data in the main branch.
+      # All other branches should compare to the latest version
+      - name: Save benchmark cache data
+        if: ${{ always() && env.GITHUB_BRANCH_NAME == env.BENCHMARK_TARGET_BRANCH }}
+        uses: actions/cache/save@v3
+        with:
+          path: |
+            cache
+          key: ${{ steps.benchmark-cache-restore.outputs.cache-primary-key }}
+
+      - name: Upload benchmark result to Github Pages
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Rust Key/Value Storage Engine Benchmarks
+          tool: 'cargo'
+          # Where the output from the benchmark tool is stored
+          output-file-path: ${{ env.BENCHMARK_RESULT_FILE }}
+          # Where the previous data file is stored
+          # `auto-push` must be false when `external-data-json-path` is set since this action reads/writes the given JSON file and never pushes to remote
+          # external-data-json-path: ./cache/benchmark-data.json
+
+          # Auto generated token per workflow
+          # https://docs.github.com/en/actions/security-guides/automatic-token-authentication
+          # Needed when deploying to Github Pages and/or making a comment on the PR
+          github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN_FOR_BENCHES_REPO }}
+          # Url to a different repository to store benchmark results (optional)
+          gh-repository: "github.com/${{ env.GITHUB_PAGES_REPO_OWNER }}/${{ env.GITHUB_PAGES_REPO_NAME }}"
+          # Name of your GitHub pages branch.
+          gh-pages-branch: "${{ env.GITHUB_PAGES_BRANCH }}"
+          # Path to a directory that contains benchmark files on the GitHub pages branch
+          benchmark-data-dir-path: "${{ env.GITHUB_PAGES_BENCHMARK_DIR }}"
+          # Push and deploy GitHub pages branch automatically
+          # Only push when on the default branch so benchmarks only reflect merged commits
+          auto-push: ${{ github.ref == 'refs/heads/main' }}
+          # Enables Job Summary for PRs
+          # Don't set this to true if this github-action-benchmark GitHub Action was previously run in another step
+          # Otherwise, it will try to clone the repo twice to the same directory and fail when trying to do the summary (2nd clone)
+          summary-always: false
+          # Show an alert with commit comment after detecting the specified performance regression
+          alert-threshold: '${{ env.ALERT_THRESHOLD }}'
+          # The threshold value used to determine if the workflow should fail
+          fail-threshold: '${{ env.FAIL_THRESHOLD }}'
+          # Enable alert commit comment
+          comment-on-alert: false
+          # Fail the workflow when an alert happens
+          fail-on-alert: false
+          # Set the user to notify if needed
+          # alert-comment-cc-users: '@username'
+          # Max number of data points in a chart for avoiding too busy chart.
+          max-items-in-chart: 30
+
+  screenshots:
+    runs-on: ubuntu-latest
+    needs: benchmark
+    env:
+      CLEANUP_FILE: cleanup.log
+      CLEANUP_PATTERN: "(png|svg|json)$"
+      SCREENSHOT_FILE: ${{ needs.benchmark.outputs.SCREENSHOT_FILE }}
+      CRITERION_BENCH_SCREENSHOT: ${{ needs.benchmark.outputs.CRITERION_BENCH_SCREENSHOT }}
+      GITHUB_PAGES_REPO_URL: ${{ needs.benchmark.outputs.GITHUB_PAGES_REPO_URL }}
+    steps:
+      # Switch to the GH Pages repo and branch
+      - name: Checkout GH Pages Repo
+        uses: actions/checkout@v3
+        with:
+          repository: "${{ env.GITHUB_PAGES_REPO_OWNER}}/${{ env.GITHUB_PAGES_REPO_NAME }}"
+          ref: "${{ env.GITHUB_PAGES_BRANCH }}"
+          token: "${{ secrets.BENCHMARK_ACTION_BOT_TOKEN_FOR_BENCHES_REPO }}"
+
+      - name: Set repo user info
+        run: |
+          git config user.name $GITHUB_PAGES_REPO_OWNER
+          git config user.email $GITHUB_PAGES_REPO_OWNER@users.noreply.github.com
+
+      - name: Download Criterion Report
+        uses: actions/download-artifact@v3
+        with:
+          name: ${{ env.CRITERION_BENCH_NAME }}
+          path: ${{ env.CRITERION_BENCH_SOURCE_PATH }}
+
+      - name: Manage directories
+        run: |
+          mkdir -pv "$SCREENSHOT_DIR" "$CRITERION_BENCH_DESTINATION_PATH" || true;
+
+      - name: Commit Criterion Reports
+        run: |
+          set -x
+          rsync -a "$CRITERION_BENCH_SOURCE_PATH"/ "$CRITERION_BENCH_DESTINATION_PATH"
+          git add "$CRITERION_BENCH_DESTINATION_PATH"
+          git status -s | grep -qE "^[CATRUM]. .*$" && {
+            git commit -q -m "Add criterion reports"
+          }
+
+      - name: Reduce github-action-benchmark report font sizes
+        run: |
+          # Page Header
+          INDEX_HTML="$GITHUB_PAGES_BENCHMARK_DIR/index.html"
+          [[ ! -e "$INDEX_HTML" ]] && exit 0
+          sed -i -Ee '/\b(body)\b \{/,/\}/s/(font-size:).*/\1 0.65em;/' "$INDEX_HTML"
+          # Graph Title
+          sed -i -Ee '/\b(benchmark-title)\b \{/,/\}/s/(font-size:).*/\1 0.75rem;/' "$INDEX_HTML"
+          git add -v $GITHUB_PAGES_BENCHMARK_DIR
+          if git diff --cached | grep ""; then
+            git status
+            git commit -m "Update Header"
+          fi
+
+      - name: Commit outstanding changes and trigger GH Pages deploy
+        run: |
+          # This will trigger another GH Pages deploy
+          git push -v
+
+      - name: Wait for GH Pages to deploy
+        uses: fountainhead/action-wait-for-check@v1.1.0
+        id: wait-for-pages
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          checkName: deploy
+          repo: "${{ env.GITHUB_PAGES_REPO_NAME }}"
+          owner: "${{ env.GITHUB_PAGES_REPO_OWNER}}"
+          ref: "${{ env.GITHUB_PAGES_BRANCH }}"
+          intervalSeconds: 5
+
+      - name: Save benchmark screenshot
+        id: create-screenshot
+        uses: swinton/screenshot-website@v1.x
+        with:
+          source: ${{ env.GITHUB_PAGES_REPO_URL }}/${{ env.GITHUB_PAGES_BENCHMARK_DIR }}/
+          destination: "${{ env.SCREENSHOT_FILE }}"
+          full-page: true
+          width: 600
+
+      - name: Save criterion report page screenshot
+        id: create-criterion-screenshot
+        uses: swinton/screenshot-website@v1.x
+        with:
+          source: ${{ env.GITHUB_PAGES_REPO_URL }}/${{ env.CRITERION_BENCH_DESTINATION_PATH }}/report/
+          destination: "${{ env.CRITERION_BENCH_SCREENSHOT }}"
+          full-page: false
+          height: 280
+          width: 650
+
+      - name: Save criterion READ report page screenshot
+        uses: swinton/screenshot-website@v1.x
+        with:
+          source: ${{ env.GITHUB_PAGES_REPO_URL }}/${{ env.CRITERION_BENCH_DESTINATION_PATH }}/engines_read/report/
+          destination: "read-${{ env.CRITERION_BENCH_SCREENSHOT }}"
+          full-page: true
+          width: 500
+
+      - name: Save criterion WRITE report page screenshot
+        uses: swinton/screenshot-website@v1.x
+        with:
+          source: ${{ env.GITHUB_PAGES_REPO_URL }}/${{ env.CRITERION_BENCH_DESTINATION_PATH }}/engines_write/report/
+          destination: "write-${{ env.CRITERION_BENCH_SCREENSHOT }}"
+          full-page: true
+          width: 500
+
+      - name: Commit screenshot changes
+        run: |
+          SCREENSHOT="${{ steps.create-screenshot.outputs.path }}"
+          SCREENSHOT_TEMP_DIR=$(dirname $SCREENSHOT)
+          mv -vf "$SCREENSHOT_TEMP_DIR"/*."$SCREENSHOT_FILE_EXTENSION" "$SCREENSHOT_DIR"
+          set -x
+          git status
+          git add -v "$SCREENSHOT_DIR"
+          git commit -m "Screenshots for $GITHUB_REF_TYPE/$GITHUB_BRANCH_NAME (${GITHUB_SHA:0:7}). Run ID: $GITHUB_RUN_ID"
+          # Don't push if a cleanup files exist
+          [[ ! -e "$CLEANUP_FILE" ]] && git push -v || true
+
+      - name: Prep old screenshots for removal
+        run: |
+          FILE_PATTERN_TO_ALWAYS_KEEP="$SCREENSHOT_FILE_PREFIX-(main|master).$SCREENSHOT_FILE_EXTENSION"
+          MAX_FILE_AGE_DAYS=30
+          git fetch -v --unshallow || true
+          echo -e "\nKeeping the following files:"
+          git log --since "$MAX_FILE_AGE_DAYS days ago" --oneline --name-only "$SCREENSHOT_DIR"/* |
+            grep "^$SCREENSHOT_DIR" | sort | uniq > excludes.temp
+          ls -1 "$SCREENSHOT_DIR"/* | grep -E "\b($FILE_PATTERN_TO_ALWAYS_KEEP)\b" >> excludes.temp || true
+          cat excludes.temp | sort | uniq | tee excludes
+          echo
+
+          # Check for and then remove old files
+          rsync_cmd() { rsync $@ -vai --remove-source-files --exclude-from=excludes "$SCREENSHOT_DIR" OLD; }
+          rsync_cmd --dry-run | grep -qE "f\+{9}" && {
+            echo -e "\nCleaning up these old files:"
+            rsync_cmd | tee "$CLEANUP_FILE"
+            rm -frv OLD
+          }
+          rm -f excludes
+
+      - name: Useful screenshot links
+        run: |
+          echo "Screenshot links"
+          echo "$GITHUB_PAGES_REPO_URL/$GITHUB_PAGES_BENCHMARK_DIR"
+          for REPORT_TYPE in "" "engines_read/" "engines_write/"; do
+            echo "$GITHUB_PAGES_REPO_URL/$CRITERION_BENCH_DESTINATION_PATH/${REPORT_TYPE}report"
+          done
+
+      - name: Cleanup and push changes (if needed)
+        run: |
+          if [[ -e "$CLEANUP_FILE" ]]; then
+            # Cleanup all files with matching pattern (keeps only the latest valid copy).
+            git rev-list --all --objects | grep -iE "\b(\.$CLEANUP_PATTERN)\b" | awk '{print $1}' > object_ids
+            java -jar tools/cleanup --private -bi object_ids
+            git push -vf
+          fi
