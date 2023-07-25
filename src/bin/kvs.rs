@@ -1,4 +1,11 @@
+use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
+use kvs::{
+    KvStore,
+    KvsErrors::{EmptyResponse, KeyNotFound},
+};
+use std::env::current_dir;
+
 #[derive(Parser)]
 // Inherit cargo package defaults for author, version, etc
 #[command(author, version, about, long_about = None)]
@@ -9,6 +16,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+
 enum Commands {
     /// Save the given string value to the given string key
     Set(SetArgs),
@@ -37,12 +45,20 @@ struct RmArgs {
     key: Key,
 }
 
-fn main() {
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    match &cli.command {
-        Commands::Set(_) => panic!("unimplemented"),
-        Commands::Get(_) => panic!("unimplemented"),
-        Commands::Rm(_) => panic!("unimplemented"),
-    }
+    let dir = current_dir()?;
+    let mut kv = KvStore::open(dir)?;
+    let result = match &cli.command {
+        Commands::Get(GetArgs { key }) => kv
+            .get(key.into())?
+            .unwrap_or_else(|| KeyNotFound.to_string()),
+        Commands::Set(SetArgs { key, value }) => kv
+            .set(key.into(), value.into())
+            .map(|_| EmptyResponse.to_string())?,
+        Commands::Rm(RmArgs { key }) => kv.remove(key.into()).map(|_| EmptyResponse.to_string())?,
+    };
+    print!("{}", result);
+    Ok(())
 }

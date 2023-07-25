@@ -47,7 +47,7 @@ fn cli_rm_non_existent_key() {
         .current_dir(&temp_dir)
         .assert()
         .failure()
-        .stdout(eq("Key not found").trim());
+        .stderr(contains("Key not found").trim());
 }
 
 // `kvs set <KEY> <VALUE>` should print nothing and exit with zero.
@@ -188,12 +188,13 @@ fn get_stored_value() -> Result<()> {
     store.set("key1".to_owned(), "value1".to_owned())?;
     store.set("key2".to_owned(), "value2".to_owned())?;
 
+    assert_eq!(store.get("key2".to_owned())?, Some("value2".to_owned()));
     assert_eq!(store.get("key1".to_owned())?, Some("value1".to_owned()));
     assert_eq!(store.get("key2".to_owned())?, Some("value2".to_owned()));
 
     // Open from disk again and check persistent data.
     drop(store);
-    let store = KvStore::open(temp_dir.path())?;
+    let mut store = KvStore::open(temp_dir.path())?;
     assert_eq!(store.get("key1".to_owned())?, Some("value1".to_owned()));
     assert_eq!(store.get("key2".to_owned())?, Some("value2".to_owned()));
 
@@ -232,7 +233,7 @@ fn get_non_existent_value() -> Result<()> {
 
     // Open from disk again and check persistent data.
     drop(store);
-    let store = KvStore::open(temp_dir.path())?;
+    let mut store = KvStore::open(temp_dir.path())?;
     assert_eq!(store.get("key2".to_owned())?, None);
 
     Ok(())
@@ -261,10 +262,11 @@ fn remove_key() -> Result<()> {
 #[test]
 fn compaction() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
-    let mut store = KvStore::open(temp_dir.path())?;
+    let temp_dir = temp_dir.path();
+    let mut store = KvStore::open(temp_dir)?;
 
     let dir_size = || {
-        let entries = WalkDir::new(temp_dir.path()).into_iter();
+        let entries = WalkDir::new(temp_dir).into_iter();
         let len: walkdir::Result<u64> = entries
             .map(|res| {
                 res.and_then(|entry| entry.metadata())
@@ -291,7 +293,7 @@ fn compaction() -> Result<()> {
 
         drop(store);
         // reopen and check content.
-        let store = KvStore::open(temp_dir.path())?;
+        let mut store = KvStore::open(temp_dir)?;
         for key_id in 0..1000 {
             let key = format!("key{}", key_id);
             assert_eq!(store.get(key)?, Some(format!("{}", iter)));

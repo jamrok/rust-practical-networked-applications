@@ -1,0 +1,26 @@
+# https://docs.codecov.com/docs/codecovyml-reference
+coverage:
+  # Range for displaying Red, Yellow, Green transition
+  # Used to customize the visible color range in Codecov (Red, Yellow, Green)
+  range: 50..70
+  round: down
+  precision: 1
+  status:
+    # https://docs.codecov.com/docs/commit-status
+    project: &default_settings
+      default:
+        # Avoid false negatives
+        threshold: 1%
+        # Set the acceptable minimum passing coverage
+        target: 70%
+    patch:
+      <<: *default_settings
+
+# Test and benchmark files don't need to be checked for coverage
+ignore:
+  - "benches"
+  - "tests"
+
+comment:
+  layout: "diff, flags, files"
+  require_changes: yes
