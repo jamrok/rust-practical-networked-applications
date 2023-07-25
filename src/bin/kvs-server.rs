@@ -1,20 +1,23 @@
 use anyhow::Result;
 use clap::{Args, Parser, ValueEnum};
-use kvs::{server::KvsServer, shared::LOG_DIRECTORY_PREFIX, KvStore, KvsEngine, SledKvsEngine};
+use kvs::{
+    server,
+    server::KvsServer,
+    shared::initialize_log_directory,
+    thread_pool::{SharedQueueThreadPool, ThreadPool},
+    KvStore, KvsEngine, SledKvsEngine,
+};
 use std::{
     env::current_dir,
-    fmt::Display,
-    io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::Path,
 };
 use strum::Display;
-use tracing::{debug, info};
-use tracing_subscriber::{fmt, prelude::*, Registry};
 
 const DEFAULT_SERVER_IP: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 const DEFAULT_SERVER_PORT: u16 = 4000;
 
-#[derive(Parser, Clone, Debug)]
+#[derive(Parser)]
 // Inherit cargo package defaults for author, version, etc
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -62,36 +65,30 @@ impl Default for CommandOptions {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    Registry::default()
-        .with(fmt::Layer::default().with_writer(io::stderr))
-        .init();
+    server::initialize_event_logging();
 
-    startup_logging(cli.options.address, &cli.options.engine);
+    let path = initialize_log_directory(&current_dir()?)?;
     match cli.options.engine {
         Engine::Kvs => {
-            let kv = KvStore::open(current_dir()?)?;
-            // let kv = KvStore::open(current_dir()?)?;
-            start_kvs_server(cli.options.address, kv)
+            let kv = KvStore::open(&path)?;
+            start_kvs_server(cli.options.address, kv, &path)
         }
         Engine::Sled => {
-            let kv = SledKvsEngine::new(current_dir()?.join(LOG_DIRECTORY_PREFIX))?;
-            start_kvs_server(cli.options.address, kv)
+            let kv = SledKvsEngine::open(&path)?;
+            start_kvs_server(cli.options.address, kv, &path)
         }
     }?;
     Ok(())
 }
 
-pub fn start_kvs_server<Engine: KvsEngine>(addr: SocketAddr, engine: Engine) -> Result<()> {
-    let mut server = KvsServer::new(addr, engine);
-    server.start()?;
+pub fn start_kvs_server<Engine: KvsEngine>(
+    address: SocketAddr,
+    engine: Engine,
+    path: &Path,
+) -> anyhow::Result<()> {
+    let cpus = num_cpus::get();
+    let pool = SharedQueueThreadPool::new(cpus as u32)?;
+    let server = KvsServer::new(address, engine, pool, path);
+    server.start(1)?;
     Ok(())
-}
-
-fn startup_logging(address: impl Display, engine: impl Display) {
-    info!("Starting KVS Server Version {}.", env!("CARGO_PKG_VERSION"));
-    info!("Using {} engine, listening on {}", engine, address);
-    debug!(
-        "Log level: {}",
-        std::env::var("RUST_LOG").unwrap_or_default()
-    )
 }

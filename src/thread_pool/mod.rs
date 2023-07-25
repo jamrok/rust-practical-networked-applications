@@ -1,6 +1,14 @@
+mod naive;
+mod rayon;
+mod shared_queue;
+
+pub use self::rayon::*;
+pub use naive::*;
+pub use shared_queue::*;
+
 use crate::Result;
 
-pub trait ThreadPool {
+pub trait ThreadPool: Send + Sync + 'static {
     /// Creates a new thread pool, immediately spawning the specified number of threads.
     ///
     /// Returns an error if any thread fails to spawn. All previously-spawned threads are terminated.

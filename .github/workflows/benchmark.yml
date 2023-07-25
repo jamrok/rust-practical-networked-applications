@@ -9,6 +9,7 @@ on:
       - "**.rs"
       - "**/Cargo*"
       - ".github/workflows/benchmark.yml"
+  workflow_dispatch:
 
 # Cancel in-progress jobs or runs for the current workflow (or the fallback run ID)
 # https://docs.github.com/en/actions/using-jobs/using-concurrency#example-using-a-fallback-value
@@ -93,13 +94,20 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-benchmark-${{ hashFiles('**/Cargo.lock') }}-${{ env.CARGO_ID }}
 
-      - name: Run Benchmark
+      - name: Run Main Benchmark
         run: |
           BENCHMARK_FILE="$PWD/${{ env.BENCHMARK_RESULT_FILE }}"
           cargo --version
-          cargo bench --bench benches -- --output-format bencher | tee "$BENCHMARK_FILE"
+          cargo bench --bench engines -- --output-format bencher | tee "$BENCHMARK_FILE"
           echo "Benchmark saved to: $BENCHMARK_FILE"
           ls -ld "$BENCHMARK_FILE"
+
+      - name: Run Additional Criterion Benchmarks
+        run: |
+          set -x
+          # Don't save to BENCHMARK_FILE (used by benchmark-actions).
+          # Benchmark will be available in criterion reports only
+          cargo bench --bench servers -- --output-format bencher
 
       - name: Upload Criterion Report
         uses: actions/upload-artifact@v3
@@ -247,9 +255,9 @@ jobs:
           set -x
           rsync -a "$CRITERION_BENCH_SOURCE_PATH"/ "$CRITERION_BENCH_DESTINATION_PATH"
           git add "$CRITERION_BENCH_DESTINATION_PATH"
-          git status -s | grep -qE "^[CATRUM]. .*$" && {
+          if git status -s | grep -qE "^[CATRUM]. .*$"; then
             git commit -q -m "Add criterion reports"
-          }
+          fi
 
       - name: Reduce github-action-benchmark report font sizes
         run: |
@@ -280,8 +288,9 @@ jobs:
           owner: "${{ env.GITHUB_PAGES_REPO_OWNER}}"
           ref: "${{ env.GITHUB_PAGES_BRANCH }}"
           intervalSeconds: 5
+          timeoutSeconds: 120
 
-      - name: Save benchmark screenshot
+      - name: Save benchmark-action screenshot
         id: create-screenshot
         uses: swinton/screenshot-website@v1.x
         with:
@@ -297,7 +306,7 @@ jobs:
           source: ${{ env.GITHUB_PAGES_REPO_URL }}/${{ env.CRITERION_BENCH_DESTINATION_PATH }}/report/
           destination: "${{ env.CRITERION_BENCH_SCREENSHOT }}"
           full-page: false
-          height: 280
+          height: 550
           width: 650
 
       - name: Save criterion READ report page screenshot
@@ -325,17 +334,15 @@ jobs:
           git status
           git add -v "$SCREENSHOT_DIR"
           git commit -m "Screenshots for $GITHUB_REF_TYPE/$GITHUB_BRANCH_NAME (${GITHUB_SHA:0:7}). Run ID: $GITHUB_RUN_ID"
-          # Don't push if a cleanup files exist
-          [[ ! -e "$CLEANUP_FILE" ]] && git push -v || true
 
       - name: Prep old screenshots for removal
         run: |
-          FILE_PATTERN_TO_ALWAYS_KEEP="$SCREENSHOT_FILE_PREFIX-(main|master).$SCREENSHOT_FILE_EXTENSION"
-          MAX_FILE_AGE_DAYS=30
+          FILE_PATTERN_TO_ALWAYS_KEEP="($SCREENSHOT_FILE_PREFIX|$CRITERION_BENCH_NAME)-(main|master|$GITHUB_BRANCH_NAME).$SCREENSHOT_FILE_EXTENSION"
+          MAX_FILE_AGE_HOURS=1
 
           git fetch -v --unshallow || true
           echo -e "\nKeeping the following files:"
-          git log --since "$MAX_FILE_AGE_DAYS days ago" --oneline --name-only "$SCREENSHOT_DIR"/* |
+          git log --since "$MAX_FILE_AGE_HOURS hours ago" --oneline --name-only "$SCREENSHOT_DIR"/* |
             grep "^$SCREENSHOT_DIR" | sort | uniq > excludes.temp
           ls -1 "$SCREENSHOT_DIR"/* | grep -E "\b($FILE_PATTERN_TO_ALWAYS_KEEP)\b" >> excludes.temp || true
           cat excludes.temp | sort | uniq | tee excludes
@@ -345,10 +352,22 @@ jobs:
           rsync_cmd() { rsync $@ -vai --remove-source-files --exclude-from=excludes "$SCREENSHOT_DIR" OLD; }
           rsync_cmd --dry-run | grep -qE "f\+{9}" && {
             echo -e "\nCleaning up these old files:"
+            set -x
             rsync_cmd | tee "$CLEANUP_FILE"
             rm -frv OLD
+            git add -uv .
+            git commit -m "Latest Changes"
           }
           rm -f excludes
+
+      - name: Cleanup and push changes (if needed)
+        run: |
+          if [[ -e "$CLEANUP_FILE" ]]; then
+            # Cleanup all files with matching pattern (keeps only the latest valid copy).
+            git rev-list --all --objects | grep -iE "\b(\.$CLEANUP_PATTERN)\b" | awk '{print $1}' > object_ids
+            java -jar tools/cleanup --private -bi object_ids
+          fi
+          git push -vf
 
       - name: Useful screenshot links
         run: |
@@ -357,12 +376,3 @@ jobs:
           for REPORT_TYPE in "" "engines_read/" "engines_write/"; do
             echo "$GITHUB_PAGES_REPO_URL/$CRITERION_BENCH_DESTINATION_PATH/${REPORT_TYPE}report"
           done
-
-      - name: Cleanup and push changes (if needed)
-        run: |
-          if [[ -e "$CLEANUP_FILE" ]]; then
-            # Cleanup all files with matching pattern (keeps only the latest valid copy).
-            git rev-list --all --objects | grep -iE "\b(\.$CLEANUP_PATTERN)\b" | awk '{print $1}' > object_ids
-            java -jar tools/cleanup --private -bi object_ids
-            git push -vf
-          fi

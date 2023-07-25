@@ -3,8 +3,16 @@ pub mod sled;
 
 pub use self::{kvs::KvStore, sled::SledKvsEngine};
 use crate::Result;
+use std::path::PathBuf;
 
-pub trait KvsEngine {
+pub trait KvsEngine: Clone + Send + Sync + 'static {
+    /// Open the `KvsEngine` at a given path and return it.
+    ///
+    /// # Errors
+    ///
+    /// If there was a problem opening the `KvsEngine`.
+    fn open(path: impl Into<PathBuf>) -> Result<Self>;
+
     /// Returns the string value of the given string key.
     ///
     /// If the key does not exist, return `None`.
@@ -16,7 +24,7 @@ pub trait KvsEngine {
     /// # Errors
     ///
     /// If the value is not read successfully.
-    fn get(&mut self, key: String) -> Result<Option<String>>;
+    fn get(&self, key: String) -> Result<Option<String>>;
 
     /// Removes the given string key.
     ///
@@ -27,7 +35,7 @@ pub trait KvsEngine {
     ///
     /// - If the key does not exist.
     /// - If the key is not removed successfully.
-    fn remove(&mut self, key: String) -> Result<()>;
+    fn remove(&self, key: String) -> Result<()>;
 
     /// Saves the given string value to the given string key.
     ///
@@ -38,5 +46,5 @@ pub trait KvsEngine {
     /// # Errors
     ///
     /// If the value is not written successfully.
-    fn set(&mut self, key: String, value: String) -> Result<()>;
+    fn set(&self, key: String, value: String) -> Result<()>;
 }
