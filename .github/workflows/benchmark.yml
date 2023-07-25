@@ -332,6 +332,7 @@ jobs:
         run: |
           FILE_PATTERN_TO_ALWAYS_KEEP="$SCREENSHOT_FILE_PREFIX-(main|master).$SCREENSHOT_FILE_EXTENSION"
           MAX_FILE_AGE_DAYS=30
+
           git fetch -v --unshallow || true
           echo -e "\nKeeping the following files:"
           git log --since "$MAX_FILE_AGE_DAYS days ago" --oneline --name-only "$SCREENSHOT_DIR"/* |

@@ -1,6 +1,6 @@
 [package]
 name = "kvs"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Jamrok <jamrok@users.noreply.github.com>"]
 edition = "2021"
 description = "A persistent key/value store that can be accessed from the command line"
@@ -21,7 +21,9 @@ tracing-subscriber = "0.3"
 [dev-dependencies]
 assert_cmd = "2.0"
 criterion = "0.5"
+crossbeam-utils = "0.8"
 fake = "2.6"
+panic-control = "0.1"
 predicates = "3.0"
 rand = "0.8"
 tempfile = "3.5"

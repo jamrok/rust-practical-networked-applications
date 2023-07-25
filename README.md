@@ -1,4 +1,4 @@
-### 🦀 Practical Networked Applications (PNA) in Rust
+## 🦀 Practical Networked Applications (PNA) in Rust
 
 [![Code Checks][badge_gha_checks]][gha_checks]
 [![Security Audit][badge_gha_audit]][gha_audit]
