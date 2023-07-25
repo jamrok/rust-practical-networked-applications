@@ -10,8 +10,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Save the given string value to the given string key
     Set(SetArgs),
+    /// Get the string value of a given string key
     Get(GetArgs),
+    /// Remove the given string key
     Rm(RmArgs),
 }
 

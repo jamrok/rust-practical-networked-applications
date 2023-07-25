@@ -1,9 +1,9 @@
 [package]
 name = "kvs"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Jamrok <jamrok@users.noreply.github.com>"]
 edition = "2021"
-description = "A key-value store"
+description = "A persistent key/value store that can be accessed from the command line"
 
 [dependencies]
 clap = { version = "4.2.7", features = ["derive"] }
@@ -12,3 +12,5 @@ derive_more = "0.99"
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.0"
+tempfile = "3.5"
+walkdir = "2.3"
