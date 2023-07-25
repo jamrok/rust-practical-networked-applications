@@ -1,0 +1,11 @@
+#!/bin/sh
+
+hooks_dir() { git config core.hookspath 2>/dev/null; }
+test -n "$(hooks_dir)" && {
+  echo "Git Hooks directory was set to: $(hooks_dir)"
+  git config --unset core.hookspath
+}
+
+test -z "$(hooks_dir)" \
+  && echo "Git Hooks are Disabled! (core.hookspath is unset)" \
+  || echo "Failed to unset core.hookspath"

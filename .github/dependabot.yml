@@ -1,0 +1,24 @@
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: daily
+      time: "00:00"
+      timezone: "America/Chicago"
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: daily
+      time: "00:00"
+      timezone: "America/Chicago"
+    ignore:
+      - dependency-name: "*"
+        # Only notify of major version changes.
+        # Patch and minor updates don't matter for libraries.
+        # Remove this ignore rule if the package has binaries
+        update-types:
+          - "version-update:semver-patch"
+          - "version-update:semver-minor"

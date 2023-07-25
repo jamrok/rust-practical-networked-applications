@@ -1,0 +1,85 @@
+name: Checks
+
+# Useful Docs:
+# Context availability: https://docs.github.com/en/actions/learn-github-actions/contexts#context-availability
+
+on:
+  push:
+    branches:
+     - "main"
+  pull_request:
+    paths:
+      - "**.rs"
+      - "**Cargo*"
+      - ".github/workflows/checks.yml"
+
+# Cancel in-progress jobs or runs for the current workflow (or the fallback run ID)
+# https://docs.github.com/en/actions/using-jobs/using-concurrency#example-using-a-fallback-value
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  dev:
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      PROFILE: dev
+
+    steps:
+    - uses: actions/checkout@v3
+
+    # Download previous cargo cache (if any)
+    # Also saves the cache at the end of the workflow if all steps were successful
+    - name: Restore cache (if any)
+      id: ci-checks-cache-restore
+      uses: actions/cache/restore@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-ci-checks-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Build (Debug)
+      run: |
+        cargo check
+        cargo build
+
+    - name: Update Local Toolchain
+      run: |
+        rustup update
+        rustup component add clippy
+        rustup install nightly
+
+    - name: Toolchain Info
+      run: |
+        rustc --version
+        cargo clippy --version
+        cargo --version --verbose
+
+    - name: Lint
+      run: |
+        cargo fmt --all -- --check
+        cargo clippy --all-targets --all-features -- -D warnings
+
+    - name: Test
+      run: |
+        cargo test --all
+
+    - name: Save cache
+      if: ${{ always() }}
+      uses: actions/cache/save@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ steps.ci-checks-cache-restore.outputs.cache-primary-key }}

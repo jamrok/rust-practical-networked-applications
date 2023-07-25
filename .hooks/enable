@@ -1,0 +1,6 @@
+#!/bin/sh
+
+HOOKS_DIR="${1:-.hooks}"
+git config core.hookspath "$HOOKS_DIR" &&
+echo "Git Hooks are Enabled!" &&
+echo "Git Hooks directory set to: $HOOKS_DIR"

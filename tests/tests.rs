@@ -14,7 +14,7 @@ fn cli_no_args() {
 fn cli_version() {
     Command::cargo_bin("kvs")
         .unwrap()
-        .args(&["-V"])
+        .args(["-V"])
         .assert()
         .stdout(contains(env!("CARGO_PKG_VERSION")));
 }
@@ -24,7 +24,7 @@ fn cli_version() {
 fn cli_get() {
     Command::cargo_bin("kvs")
         .unwrap()
-        .args(&["get", "key1"])
+        .args(["get", "key1"])
         .assert()
         .failure()
         .stderr(contains("unimplemented"));
@@ -35,7 +35,7 @@ fn cli_get() {
 fn cli_set() {
     Command::cargo_bin("kvs")
         .unwrap()
-        .args(&["set", "key1", "value1"])
+        .args(["set", "key1", "value1"])
         .assert()
         .failure()
         .stderr(contains("unimplemented"));
@@ -46,7 +46,7 @@ fn cli_set() {
 fn cli_rm() {
     Command::cargo_bin("kvs")
         .unwrap()
-        .args(&["rm", "key1"])
+        .args(["rm", "key1"])
         .assert()
         .failure()
         .stderr(contains("unimplemented"));
@@ -56,13 +56,13 @@ fn cli_rm() {
 fn cli_invalid_get() {
     Command::cargo_bin("kvs")
         .unwrap()
-        .args(&["get"])
+        .args(["get"])
         .assert()
         .failure();
 
     Command::cargo_bin("kvs")
         .unwrap()
-        .args(&["get", "extra", "field"])
+        .args(["get", "extra", "field"])
         .assert()
         .failure();
 }
@@ -71,19 +71,19 @@ fn cli_invalid_get() {
 fn cli_invalid_set() {
     Command::cargo_bin("kvs")
         .unwrap()
-        .args(&["set"])
+        .args(["set"])
         .assert()
         .failure();
 
     Command::cargo_bin("kvs")
         .unwrap()
-        .args(&["set", "missing_field"])
+        .args(["set", "missing_field"])
         .assert()
         .failure();
 
     Command::cargo_bin("kvs")
         .unwrap()
-        .args(&["set", "extra", "extra", "field"])
+        .args(["set", "extra", "extra", "field"])
         .assert()
         .failure();
 }
@@ -92,13 +92,13 @@ fn cli_invalid_set() {
 fn cli_invalid_rm() {
     Command::cargo_bin("kvs")
         .unwrap()
-        .args(&["rm"])
+        .args(["rm"])
         .assert()
         .failure();
 
     Command::cargo_bin("kvs")
         .unwrap()
-        .args(&["rm", "extra", "field"])
+        .args(["rm", "extra", "field"])
         .assert()
         .failure();
 }
@@ -107,7 +107,7 @@ fn cli_invalid_rm() {
 fn cli_invalid_subcommand() {
     Command::cargo_bin("kvs")
         .unwrap()
-        .args(&["unknown", "subcommand"])
+        .args(["unknown", "subcommand"])
         .assert()
         .failure();
 }
