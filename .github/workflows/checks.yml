@@ -12,6 +12,7 @@ on:
       - "**.rs"
       - "**Cargo*"
       - ".github/workflows/checks.yml"
+  workflow_dispatch:
 
 # Cancel in-progress jobs or runs for the current workflow (or the fallback run ID)
 # https://docs.github.com/en/actions/using-jobs/using-concurrency#example-using-a-fallback-value
@@ -70,7 +71,7 @@ jobs:
 
     - name: Test
       run: |
-        cargo test --all
+        cargo test
 
     - name: Save cache
       if: ${{ always() }}

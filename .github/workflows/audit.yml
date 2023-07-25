@@ -12,6 +12,7 @@ on:
       - ".github/workflows/audit.yml"
   schedule:
     - cron: '30 0 * * *'
+  workflow_dispatch:
 
 # Cancel in-progress jobs or runs for the current workflow (or the fallback run ID)
 # https://docs.github.com/en/actions/using-jobs/using-concurrency#example-using-a-fallback-value
@@ -35,7 +36,7 @@ jobs:
 
       - name: Audit
         run: |
-          if [[ "${{ steps.audit-cache.outputs.cache-hit }}" == "true" ]]; then
+          if [[ $GITHUB_REF != "refs/heads/main" && "${{ steps.audit-cache.outputs.cache-hit }}" == "true" ]]; then
             echo "Skipping audit due to a previous run for the same files being successful"
           else
             cargo-audit --version

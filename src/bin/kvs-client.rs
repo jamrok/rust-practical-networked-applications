@@ -1,17 +1,11 @@
 use anyhow::Result;
 use clap::{Args, Parser};
-use derive_more::Constructor;
-use kvs::{
-    serde::BincodeSerde,
-    shared::{Command, CommandResponse},
-};
+use kvs::{client::KvsClient, shared::Command};
 use std::{
     fmt::Debug,
-    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     process::exit,
-    time::Duration,
 };
-use tracing::debug;
 
 const DEFAULT_SERVER_IP: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 const DEFAULT_SERVER_PORT: u16 = 4000;
@@ -50,29 +44,14 @@ impl Default for CommandOptions {
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let cli = Cli::parse();
-    KvsClient::new(cli.options.addr).send_command(&cli.command)?;
-    Ok(())
-}
-
-#[derive(Constructor, Clone, Debug)]
-pub struct KvsClient {
-    server_address: SocketAddr,
-}
-
-impl KvsClient {
-    fn send_command(&self, command: &Command) -> Result<()> {
-        let timeout = Duration::from_secs(10);
-        let stream = TcpStream::connect_timeout(&self.server_address, timeout)?;
-        stream.set_read_timeout(Some(timeout))?;
-        command.serialize_into_stream(&stream)?;
-        let response = CommandResponse::deserialize_from_stream(&stream)?;
-        debug!("Got: {:?}", &response);
-        if response.is_err() {
-            eprint!("Error: {}", response);
-            exit(1)
-        } else {
+    match KvsClient::new(cli.options.addr).send_command(&cli.command) {
+        Ok(response) => {
             print!("{}", response);
-            Ok(())
         }
-    }
+        Err(error) => {
+            eprint!("{}", error);
+            exit(1)
+        }
+    };
+    Ok(())
 }

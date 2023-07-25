@@ -1,13 +1,14 @@
 use crate::{
-    serde::BincodeSerde,
+    serde::bincode::Serde,
     shared::{
-        initialize_log_directory, new_reader, new_writer, Command, Remove, Set,
-        LOG_COMPACTION_MAX_KEY_DENSITY_PERCENT, LOG_ROTATION_MIN_SIZE_BYTES,
+        new_reader, new_writer, Command, Remove, Set, LOG_COMPACTION_MAX_KEY_DENSITY_PERCENT,
+        LOG_ROTATION_MIN_SIZE_BYTES, LOG_ROTATION_MIN_SIZE_BYTES_DEFAULT,
     },
     KvsEngine,
     KvsError::{KeyNotFound, LogIndexIDError},
     Result,
 };
+use dashmap::DashMap;
 use derive_more::{Constructor, From};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -16,6 +17,7 @@ use std::{
     io::{BufReader, BufWriter, Seek, SeekFrom},
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, RwLock},
 };
 
 #[derive(Constructor, Clone, Debug, Default, From, Deserialize, Serialize)]
@@ -36,7 +38,7 @@ pub struct LogPointer {
     offset: LogOffset,
 }
 
-type LogPointerIndex = HashMap<String, LogPointer>;
+type LogPointerIndex = DashMap<String, LogPointer>;
 type LogId = u64;
 type LogOffset = u64;
 type LogSize = u64;
@@ -48,6 +50,7 @@ pub enum LogIndexState {
     Ready,
 }
 
+#[derive(Clone)]
 pub struct LogMetadata {
     active_log_id: LogId,
     size: LogSize,
@@ -57,68 +60,67 @@ pub struct LogMetadata {
     state: LogIndexState,
 }
 
+#[derive(Clone)]
 pub struct LogIndex {
-    database: LogPointerIndex,
-    reader: HashMap<LogId, BufReader<File>>,
-    writer: BufWriter<File>,
-    metadata: LogMetadata,
+    database: Arc<LogPointerIndex>,
+    reader: Arc<DashMap<LogId, BufReader<File>>>,
+    writer: Arc<RwLock<BufWriter<File>>>,
+    metadata: Arc<RwLock<LogMetadata>>,
 }
 
 impl LogIndex {
     fn new(path: PathBuf) -> Result<LogIndex> {
-        let path = initialize_log_directory(path)?;
         let ids = Self::get_file_log_ids(&path)?;
         let mut id = 0;
-        let mut reader = HashMap::new();
+        let reader = Arc::new(DashMap::new());
         for log_id in &ids {
-            let buf_reader = Self::log_reader(&path, log_id)?;
+            let buf_reader = Self::log_reader(&path, *log_id)?;
             reader.insert(*log_id, buf_reader);
             id = *log_id;
         }
         let compaction_list = CompactionList::default();
-        let writer = Self::log_writer(&path, &id)?;
+        let writer = Arc::new(RwLock::new(Self::log_writer(&path, id)?));
         let size = 0;
 
-        // dbg!(&path, &reader, &writer);
         Ok(LogIndex {
-            database: Default::default(),
+            database: Arc::default(),
             reader,
             writer,
-            metadata: LogMetadata {
+            metadata: Arc::new(RwLock::new(LogMetadata {
                 active_log_id: id,
                 size,
                 path,
                 ids,
                 eligible_for_compaction: compaction_list,
-                state: Default::default(),
-            },
+                state: LogIndexState::default(),
+            })),
         })
     }
 
-    fn log_reader(path: &Path, id: &LogId) -> Result<BufReader<File>> {
-        let file = Self::get_log_file(path, id)?;
+    fn log_reader(path: &Path, id: LogId) -> Result<BufReader<File>> {
+        let file = Self::get_log_file(path, id);
         if !file.exists() {
             File::create(&file)?;
         }
         new_reader(&file)
     }
 
-    fn log_writer(path: &Path, id: &LogId) -> Result<BufWriter<File>> {
-        let file = Self::get_log_file(path, id)?;
+    fn log_writer(path: &Path, id: LogId) -> Result<BufWriter<File>> {
+        let file = Self::get_log_file(path, id);
         new_writer(file)
     }
 
-    fn get_log_file(path: &Path, log_id: &LogId) -> Result<PathBuf> {
-        Ok(path.join(format!("{}", log_id)))
+    fn get_log_file(path: &Path, log_id: LogId) -> PathBuf {
+        path.join(format!("{log_id}"))
     }
 
-    fn replay_log(mut self) -> Result<Self> {
+    fn replay_log(self) -> Result<Self> {
         let mut id = 0;
         let mut size = 0;
-        let mut sorted_log_ids = self.reader.keys().copied().collect::<Vec<_>>();
+        let mut sorted_log_ids = self.reader.iter().map(|f| *f.key()).collect::<Vec<_>>();
         sorted_log_ids.sort_unstable();
         for log_id in sorted_log_ids {
-            let record = self
+            let mut record = self
                 .reader
                 .get_mut(&log_id)
                 .expect("Unable to fetch reader by Id");
@@ -130,25 +132,17 @@ impl LogIndex {
                 let command = Command::deserialize_from_reader(&mut reader)?;
                 let log_pointer = LogPointer::new(id, offset);
                 size = log_pointer.offset;
-                // eprintln!(
-                //     "{} | {} | {:?} | {:?}",
-                //     &offset, &size, &log_pointer, &command
-                // );
-                Self::update_log_index(&mut self.database, command, log_pointer)?;
+                Self::update_log_index(&self.database, command, log_pointer);
                 offset = reader.stream_position()?;
-                self.writer.seek(SeekFrom::Start(offset))?;
+                self.writer.write()?.seek(SeekFrom::Start(offset))?;
             }
         }
-        self.metadata.active_log_id = id;
-        self.metadata.size = size;
+        (self.metadata.write()?).active_log_id = id;
+        (self.metadata.write()?).size = size;
         Ok(self)
     }
 
-    fn update_log_index(
-        index: &mut LogPointerIndex,
-        command: Command,
-        log_pointer: LogPointer,
-    ) -> Result<()> {
+    fn update_log_index(index: &LogPointerIndex, command: Command, log_pointer: LogPointer) {
         match command {
             Command::Set(cmd) => {
                 index.insert(cmd.key, log_pointer);
@@ -158,56 +152,48 @@ impl LogIndex {
             }
             Command::Get(_) => {}
         };
-        Ok(())
     }
 
-    fn log_command(&mut self, command: Command) -> Result<()> {
+    fn log_command(&self, command: Command) -> Result<()> {
         self.try_log_rotate()?;
-        let log_offset = &command.serialize_into_writer(&mut self.writer)?;
-        let log_pointer = LogPointer::new(self.metadata.active_log_id, *log_offset);
-        self.metadata.size = self.writer.stream_position()?;
-        // dbg!(&self.size);
-        // eprintln!(
-        //     "{} | {:?} | {:?}",
-        //     &self.metadata.size, &log_pointer, &command
-        // );
-
-        Self::update_log_index(&mut self.database, command, log_pointer)?;
+        let mut writer = self.writer.write()?;
+        let log_offset = command.serialize_into_writer(&mut *writer)?;
+        self.metadata.write()?.size = writer.stream_position()?;
+        drop(writer);
+        let log_pointer = LogPointer::new(self.metadata.read()?.active_log_id, log_offset);
+        Self::update_log_index(&self.database, command, log_pointer);
         Ok(())
     }
 
-    fn try_log_rotate(&mut self) -> Result<bool> {
-        // eprintln!("{} ", &self.metadata.size,);
-        self.metadata.size = self.writer.stream_position()?;
-        if self.metadata.state == LogIndexState::Compacting {
+    fn try_log_rotate(&self) -> Result<bool> {
+        if self.metadata.read()?.state == LogIndexState::Compacting {
             return Ok(false);
         }
         let mut rotated = false;
-        // TODO: Remove all the dbg statements
-        // dbg!(
-        //     "log_rotate",
-        //     self.metadata.size,
-        //     LOG_ROTATION_MIN_SIZE_BYTES,
-        //     &self.writer
-        // );
-        if self.metadata.size > LOG_ROTATION_MIN_SIZE_BYTES {
-            self.metadata.size = 0;
-            self.metadata.active_log_id += 1;
-            self.metadata.ids.push(self.metadata.active_log_id);
-            self.writer = Self::log_writer(&self.metadata.path, &self.metadata.active_log_id)?;
+        let log_rotation_min_size =
+            LOG_ROTATION_MIN_SIZE_BYTES.get_or_init(|| LOG_ROTATION_MIN_SIZE_BYTES_DEFAULT);
+        let mut metadata = self.metadata.write()?;
+        metadata.size = self.writer.write()?.stream_position()?;
+        if metadata.size > *log_rotation_min_size {
+            metadata.size = 0;
+            metadata.active_log_id += 1;
+            let log_id = metadata.active_log_id;
+            metadata.ids.push(log_id);
+            *self.writer.write()? = Self::log_writer(&metadata.path, metadata.active_log_id)?;
+
             self.reader.insert(
-                self.metadata.active_log_id,
-                Self::log_reader(&self.metadata.path, &self.metadata.active_log_id)?,
+                metadata.active_log_id,
+                Self::log_reader(&metadata.path, metadata.active_log_id)?,
             );
+            drop(metadata);
             self.try_compacting_logs()?;
             rotated = true;
         }
         Ok(rotated)
     }
 
-    fn get_value(&mut self, key: String) -> Result<Option<String>> {
-        let log_pointer = self.database.get(&key).cloned();
-        // dbg!("get", &key, &self.in_memory, &self.reader);
+    fn get_value(&self, key: &str) -> Result<Option<String>> {
+        let log_pointer = self.database.get(key);
         let mut value = None;
         if let Some(pointer) = &log_pointer {
             if let Some(command) = self.get_command(pointer)? {
@@ -217,11 +203,9 @@ impl LogIndex {
         Ok(value)
     }
 
-    fn get_command(&mut self, pointer: &LogPointer) -> Result<Option<Command>> {
-        if let Some(reader) = self.reader.get_mut(&pointer.id) {
-            // dbg!(&reader.stream_position());
+    fn get_command(&self, pointer: &LogPointer) -> Result<Option<Command>> {
+        if let Some(reader) = self.reader.get_mut(&pointer.id).as_deref_mut() {
             reader.seek(SeekFrom::Start(pointer.offset))?;
-            // dbg!(&reader.stream_position());
             Ok(Some(Command::deserialize_from_reader(reader)?))
         } else {
             Ok(None)
@@ -238,34 +222,30 @@ impl LogIndex {
                     .map(|path| path.file_name().unwrap_or_default().to_owned())
                     .map(|s| s.to_str().unwrap_or_default().to_owned())
                     .collect::<String>();
-                str::parse::<u64>(&filename).map_err(|e| e.into())
+                str::parse::<u64>(&filename).map_err(Into::into)
             })
             .collect::<Result<Vec<_>>>()?;
         if log_ids.is_empty() {
             log_ids = vec![0];
         } else {
-            log_ids.sort();
+            log_ids.sort_unstable();
         }
-        // dbg!(&log_ids);
         Ok(log_ids)
     }
 
-    fn try_compacting_logs(&mut self) -> Result<()> {
-        self.metadata.state = LogIndexState::Compacting;
-
-        self.identify_logs_that_can_be_compacted();
-        // dbg!(&self.metadata.compaction_list);
-        // dbg!(&self.database);
+    fn try_compacting_logs(&self) -> Result<()> {
+        self.metadata.write()?.state = LogIndexState::Compacting;
+        self.identify_logs_that_can_be_compacted()?;
         self.try_migrating_infrequently_accessed_keys()?;
         self.try_removing_stale_logs()?;
-        // dbg!(&self.metadata.compaction_list);
-        self.metadata.state = LogIndexState::Ready;
+        self.metadata.write()?.state = LogIndexState::Ready;
         Ok(())
     }
 
-    fn identify_logs_that_can_be_compacted(&mut self) {
+    fn identify_logs_that_can_be_compacted(&self) -> Result<()> {
         let mut total_records_per_log_id = HashMap::<LogId, Vec<LogPointer>>::new();
-        for log_pointer in self.database.values() {
+        for record in &*self.database {
+            let log_pointer = record.value();
             total_records_per_log_id
                 .entry(log_pointer.id)
                 .and_modify(|log_pointers| log_pointers.push(log_pointer.clone()))
@@ -277,58 +257,47 @@ impl LogIndex {
             .max_by(|x, y| x.len().cmp(&y.len()))
             .cloned()
             .unwrap_or(vec![LogPointer::default()]);
-        for log_file_id in &self.metadata.ids {
-            let active_id = total_records_per_log_id.get_mut(log_file_id);
+        let mut metadata = self.metadata.write()?;
+        let mut migration_list = Vec::new();
+        let mut eligible_ids = HashMap::new();
+        for log_file_id in &metadata.ids {
+            let active_id = total_records_per_log_id.get(log_file_id);
             if let Some(total_entries_in_this_log) = active_id {
                 let log_id_percent =
                     (total_entries_in_this_log.len() * 100) / max_records_in_any_log.len();
                 if log_id_percent as u64 <= LOG_COMPACTION_MAX_KEY_DENSITY_PERCENT {
-                    // dbg!(
-                    //     &log_file_id,
-                    //     // &total_entries_in_this_log,
-                    //     // &max_records_in_any_log,
-                    //     &log_id_percent,
-                    // );
                     // Mark this log as one that has entries that need migrating
-                    self.metadata
-                        .eligible_for_compaction
-                        .ids
-                        .insert(*log_file_id, CompactionAction::Migrate);
+                    eligible_ids.insert(*log_file_id, CompactionAction::Migrate);
                     // Save the list of log entries that need to be migrated
-                    self.metadata
-                        .eligible_for_compaction
-                        .migration_list
-                        .extend(total_entries_in_this_log.clone())
+                    migration_list.extend(total_entries_in_this_log.clone());
                 }
-            } else if log_file_id != &self.metadata.active_log_id {
+            } else if log_file_id != &metadata.active_log_id {
                 // Mark this log as one that can be deleted
-                self.metadata
-                    .eligible_for_compaction
-                    .ids
-                    .insert(*log_file_id, CompactionAction::Remove);
+                eligible_ids.insert(*log_file_id, CompactionAction::Remove);
                 continue;
             }
         }
-    }
-
-    pub fn try_migrating_infrequently_accessed_keys(&mut self) -> Result<()> {
-        if self
-            .metadata
+        metadata.eligible_for_compaction.ids.extend(eligible_ids);
+        metadata
             .eligible_for_compaction
             .migration_list
-            .is_empty()
-        {
+            .extend(migration_list);
+        Ok(())
+    }
+
+    pub fn try_migrating_infrequently_accessed_keys(&self) -> Result<()> {
+        let mut metadata = self.metadata.write()?;
+        if metadata.eligible_for_compaction.migration_list.is_empty() {
             return Ok(());
         }
-        while let Some(log_pointer) = self.metadata.eligible_for_compaction.migration_list.pop() {
+        while let Some(log_pointer) = metadata.eligible_for_compaction.migration_list.pop() {
             let command = self.get_command(&log_pointer.clone())?;
             if let Some(command) = command {
                 self.log_command(command.clone())?;
             }
         }
 
-        for (_, action) in self
-            .metadata
+        for (_, action) in metadata
             .eligible_for_compaction
             .ids
             .iter_mut()
@@ -340,17 +309,16 @@ impl LogIndex {
         Ok(())
     }
 
-    fn try_removing_stale_logs(&mut self) -> Result<()> {
-        for (log_id, _) in self
-            .metadata
+    fn try_removing_stale_logs(&self) -> Result<()> {
+        let metadata = self.metadata.write()?;
+        for (log_id, _) in metadata
             .eligible_for_compaction
             .ids
             .iter()
             .filter(|(_, action)| **action == CompactionAction::Remove)
         {
-            let file = Self::get_log_file(&self.metadata.path, log_id)?;
+            let file = Self::get_log_file(&metadata.path, *log_id);
             if file.exists() && file.is_file() {
-                // dbg!(&file);
                 fs::remove_file(file)?;
             }
         }
@@ -359,40 +327,43 @@ impl LogIndex {
 }
 
 /// Contains the in-memory index and
-#[derive(Constructor)]
+#[derive(Constructor, Clone)]
 pub struct KvStore {
-    index: LogIndex,
+    index: Arc<LogIndex>,
+    /// Use to selectively lock write operations, without locking the index
+    write_lock: Arc<Mutex<()>>,
 }
 
 impl KvsEngine for KvStore {
-    fn get(&mut self, key: String) -> Result<Option<String>> {
-        self.index.get_value(key)
+    /// Open the `KvStore` at a given path and return the `KvStore`.
+    ///
+    /// # Errors
+    ///
+    /// If there was a problem opening the `KvStore`.
+    fn open(path: impl Into<PathBuf>) -> Result<Self> {
+        let path = path.into();
+        let index = Arc::new(LogIndex::new(path)?.replay_log()?);
+        let write_lock = Arc::new(Mutex::new(()));
+        Ok(KvStore::new(index, write_lock))
     }
 
-    fn remove(&mut self, key: String) -> Result<()> {
+    fn get(&self, key: String) -> Result<Option<String>> {
+        self.index.get_value(&key)
+    }
+
+    fn remove(&self, key: String) -> Result<()> {
         if self.index.database.contains_key(&key) {
             let command = Command::from(Remove::new(key));
+            let _write_lock = self.write_lock.lock();
             self.index.log_command(command)
         } else {
             Err(KeyNotFound)?
         }
     }
 
-    fn set(&mut self, key: String, value: String) -> Result<()> {
+    fn set(&self, key: String, value: String) -> Result<()> {
         let command = Command::from(Set::new(key, value));
+        let _write_lock = self.write_lock.lock();
         self.index.log_command(command)
-    }
-}
-
-impl KvStore {
-    /// Open the KvStore at a given path and return the KvStore.
-    ///
-    /// # Errors
-    ///
-    /// If there was a problem opening the KvStore.
-    pub fn open(path: impl Into<PathBuf>) -> Result<KvStore> {
-        let path = path.into();
-        let index = LogIndex::new(path)?.replay_log()?;
-        Ok(KvStore::new(index))
     }
 }

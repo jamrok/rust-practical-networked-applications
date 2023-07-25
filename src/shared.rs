@@ -1,5 +1,5 @@
 use crate::{
-    serde::BincodeSerde,
+    serde::bincode::Serde,
     KvsEngine,
     KvsError::{BufReaderError, KeyNotFound},
     Result,
@@ -12,12 +12,16 @@ use std::{
     fs,
     fs::{File, OpenOptions},
     io::{BufReader, BufWriter},
-    path::PathBuf,
+    path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 // TODO: move to config files
 pub const LOG_DIRECTORY_PREFIX: &str = "log_index";
-pub const LOG_ROTATION_MIN_SIZE_BYTES: u64 = 256 * 1024;
+
+pub static LOG_ROTATION_MIN_SIZE_BYTES: OnceLock<u64> = OnceLock::new();
+pub const LOG_ROTATION_MIN_SIZE_BYTES_DEFAULT: u64 = 1024 * 1024 * 1024;
+
 pub const LOG_COMPACTION_MAX_KEY_DENSITY_PERCENT: u64 = 30;
 
 #[derive(Clone, Debug, From, Serialize, Deserialize)]
@@ -27,6 +31,7 @@ pub enum CommandResponse {
 }
 
 impl CommandResponse {
+    #[must_use]
     pub fn is_err(&self) -> bool {
         matches!(
             *self,
@@ -36,7 +41,7 @@ impl CommandResponse {
     }
 }
 
-impl BincodeSerde for CommandResponse {}
+impl Serde for CommandResponse {}
 
 impl Display for CommandResponse {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -44,7 +49,7 @@ impl Display for CommandResponse {
             CommandResponse::ResultWithNoResponse(e) => e.to_string(),
             CommandResponse::ResultWithPossibleValue(val) => val.to_string(),
         };
-        write!(f, "{}", value)
+        write!(f, "{value}")
     }
 }
 
@@ -61,9 +66,9 @@ impl Display for ResultWithPossibleValue {
             ResultWithPossibleValue::Err(e) => e.into(),
         };
         if value.is_empty() {
-            write!(f, "{}", value)
+            write!(f, "{value}")
         } else {
-            writeln!(f, "{}", value)
+            writeln!(f, "{value}")
         }
     }
 }
@@ -77,10 +82,10 @@ pub enum ResultWithNoResponse {
 impl Display for ResultWithNoResponse {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let value = match self {
-            ResultWithNoResponse::Ok(()) => "".to_string(),
-            ResultWithNoResponse::Err(e) => format!("{}\n", e),
+            ResultWithNoResponse::Ok(()) => String::new(),
+            ResultWithNoResponse::Err(e) => format!("{e}\n"),
         };
-        write!(f, "{}", value)
+        write!(f, "{value}")
     }
 }
 
@@ -102,7 +107,7 @@ impl From<Result<()>> for CommandResponse {
     }
 }
 
-pub fn initialize_log_directory(path: PathBuf) -> Result<PathBuf> {
+pub fn initialize_log_directory(path: &Path) -> Result<PathBuf> {
     let path = path.join(LOG_DIRECTORY_PREFIX);
     fs::create_dir_all(&path)?;
     Ok(path)
@@ -110,12 +115,10 @@ pub fn initialize_log_directory(path: PathBuf) -> Result<PathBuf> {
 
 pub fn new_reader(file: &PathBuf) -> Result<BufReader<File>> {
     Ok(BufReader::new(
-        OpenOptions::new().read(true).open(file).map_err(|e| {
-            BufReaderError(
-                format!("Error opening file {}", file.display().to_string()),
-                e,
-            )
-        })?,
+        OpenOptions::new()
+            .read(true)
+            .open(file)
+            .map_err(|e| BufReaderError(format!("Error opening file {}", file.display()), e))?,
     ))
 }
 
@@ -144,7 +147,7 @@ pub struct Set {
     pub value: Value,
 }
 
-#[derive(Args, Clone, Debug, Serialize, Deserialize)]
+#[derive(Args, Constructor, Clone, Debug, Default, From, Serialize, Deserialize)]
 pub struct Get {
     pub key: Key,
 }
@@ -155,7 +158,7 @@ pub struct Remove {
 }
 
 impl Command {
-    pub fn process<Engine: KvsEngine>(self, kv: &mut Engine) -> CommandResponse {
+    pub fn process<Engine: KvsEngine>(self, kv: &Engine) -> CommandResponse {
         match self {
             Command::Set(Set { key, value }) => kv.set(key, value).into(),
             Command::Get(Get { key }) => match kv.get(key) {
@@ -170,6 +173,7 @@ impl Command {
         }
     }
 
+    #[must_use]
     pub fn value(&self) -> Option<&Value> {
         match self {
             Command::Set(cmd) => Some(&cmd.value),
@@ -178,4 +182,4 @@ impl Command {
     }
 }
 
-impl BincodeSerde for Command {}
+impl Serde for Command {}
