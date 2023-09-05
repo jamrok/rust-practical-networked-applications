@@ -31,7 +31,7 @@ jobs:
       PROFILE: dev
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     # Download previous cargo cache (if any)
     # Also saves the cache at the end of the workflow if all steps were successful
@@ -88,7 +88,7 @@ jobs:
   coverage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       # Download previous cargo cache (if any)
       # Also saves the cache at the end of the workflow if all steps were successful

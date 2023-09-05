@@ -51,7 +51,7 @@ jobs:
       CRITERION_BENCH_SCREENSHOT: ${{ steps.custom-vars.outputs.CRITERION_BENCH_SCREENSHOT }}
       GITHUB_PAGES_REPO_URL: ${{ steps.custom-vars.outputs.GITHUB_PAGES_REPO_URL }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       # https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#setting-an-environment-variable
       # https://docs.github.com/en/actions/learn-github-actions/variables#default-environment-variables
@@ -229,7 +229,7 @@ jobs:
     steps:
       # Switch to the GH Pages repo and branch
       - name: Checkout GH Pages Repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: "${{ env.GITHUB_PAGES_REPO_OWNER}}/${{ env.GITHUB_PAGES_REPO_NAME }}"
           ref: "${{ env.GITHUB_PAGES_BRANCH }}"
